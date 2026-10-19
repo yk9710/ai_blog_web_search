@@ -317,7 +317,7 @@ def get_graph(retriever_tool, web_search_tool, chat_model, max_rewrites=MAX_REWR
             return update
 
         else:
-            update["answer"] = parser.invoke(response).strip() or "模型未返回回答，请重新提问。"
+            update = {"answer": parser.invoke(response).strip() or "模型未返回回答，请重新提问。"}
         return update
 
     # search节点，用于联网搜索博客中不存在的答案
