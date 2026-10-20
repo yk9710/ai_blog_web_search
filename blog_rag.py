@@ -220,7 +220,7 @@ def create_blog_tool(db):
 def web_search(query: str) -> list | str:
     """执行网页搜索"""
     try:
-        client = TavilyClient(os.getenv("TAVLY_API_KEY", ""))
+        client = TavilyClient(os.getenv("TAVILY_API_KEY", ""))
         response = client.search(
             query=query,
             search_depth="advanced",
@@ -284,40 +284,31 @@ def get_graph(retriever_tool, web_search_tool, chat_model, max_rewrites=MAX_REWR
         response = agent_model.invoke([instruction, *state["messages"]])
 
         if response.tool_calls:
-            # queries = [str(call["args"].get("query", "")) for call in response.tool_calls]
-            # update["search_query"] = "；".join(queries) or state["question"]
-
             # 模型可能违反提示同时调用两类工具，只保留其中一类，避免单个 ToolNode 无法执行
-            if response.tool_calls:
-                # 模型可能违反提示同时调用两类工具，只保留其中一类，避免单个 ToolNode 无法执行
-                tool_names = set(call["name"] for call in response.tool_calls)
-                # 如果调用了两个工具直接优先使用web
-                if len(list(tool_names)) > 1:
-                    search_type = "web"
-                    response = response.model_copy(
-                        update={"tool_calls": [call for call in response.tool_calls if call["name"] == "web_search"]})
-                else:
-                    search_type = "blog" if list(tool_names)[0] == "retrieve_blog_posts" else "web"
-
-                    response = response.model_copy(
-                        update={"tool_calls": [call for call in response.tool_calls if
-                                               call["name"] == list(tool_names)[0]]})
-                update = {
-                    "messages": [response],
-                    "search_type": search_type,
-                    "search_query": "；".join(
-                        str(call["args"].get("query", "")) for call in response.tool_calls
-                    ) or state["question"],
-                }
+            tool_names = set(call["name"] for call in response.tool_calls)
+            # 如果调用了两个工具直接优先使用web
+            if len(list(tool_names)) > 1:
+                search_type = "web"
+                response = response.model_copy(
+                    update={"tool_calls": [call for call in response.tool_calls if call["name"] == "web_search"]})
             else:
-                update = {
-                    "messages": [response],
-                    "answer": parser.invoke(response).strip() or "模型未返回回答，请重新提问。",
-                }
-            return update
+                search_type = "blog" if list(tool_names)[0] == "retrieve_blog_posts" else "web"
 
+                response = response.model_copy(
+                    update={"tool_calls": [call for call in response.tool_calls if
+                                           call["name"] == list(tool_names)[0]]})
+            update = {
+                "messages": [response],
+                "search_type": search_type,
+                "search_query": "；".join(
+                    str(call["args"].get("query", "")) for call in response.tool_calls
+                ) or state["question"],
+            }
         else:
-            update = {"answer": parser.invoke(response).strip() or "模型未返回回答，请重新提问。"}
+            update = {
+                "messages": [response],
+                "answer": parser.invoke(response).strip() or "模型未返回回答，请重新提问。",
+            }
         return update
 
     # search节点，用于联网搜索博客中不存在的答案
