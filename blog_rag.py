@@ -12,7 +12,7 @@ from bs4 import BeautifulSoup
 import httpx
 from dotenv import load_dotenv
 from langchain_core.documents import Document
-from langchain_core.messages import AIMessage, AnyMessage, HumanMessage, SystemMessage, ToolMessage
+from langchain_core.messages import AIMessage, AnyMessage, HumanMessage, ToolMessage
 from langchain_core.output_parsers import StrOutputParser
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.runnables import RunnableConfig
@@ -22,14 +22,14 @@ from langchain_qdrant import QdrantVectorStore
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langgraph.graph import END, START, StateGraph
 from langgraph.graph.message import add_messages
-from langgraph.prebuilt import ToolNode, tools_condition
+from langgraph.prebuilt import ToolNode
 from pydantic import BaseModel, Field
 from qdrant_client import QdrantClient
 from qdrant_client.models import Distance, VectorParams
 from tavily import TavilyClient
 from typing_extensions import TypedDict
 
-BASE_DIR = Path(__file__).resolve().parents[1]
+BASE_DIR = Path(__file__).resolve().parent
 
 load_dotenv(BASE_DIR / ".env")
 
@@ -254,9 +254,8 @@ def get_graph(retriever_tool, web_search_tool, chat_model, max_rewrites=MAX_REWR
     if max_rewrites < 0:
         raise ValueError("改写次数不能为负数。")
     parser = StrOutputParser()
-    agent_model = chat_model.bind_tools([retriever_tool, web_search_tool])
     grader = chat_model.with_structured_output(RelevanceGrade, method="function_calling")
-    tool_node = ToolNode([retriever_tool], handle_tool_errors=False)
+    tool_node = ToolNode([retriever_tool], handle_tool_errors=True)
     tool_search_node = ToolNode([web_search_tool], handle_tool_errors=False)
     grade_prompt = ChatPromptTemplate.from_messages([
         ("system",
@@ -274,42 +273,21 @@ def get_graph(retriever_tool, web_search_tool, chat_model, max_rewrites=MAX_REWR
         ("human", "问题：{question}\n\n资料：\n{context}"),
     ])
 
-    # Agent节点决定是否调用工具
+    # 首次查询直接交给博客检索工具，避免模型跳过向量检索。
     def agent(state):
-        instruction = SystemMessage(content=(
-            "你是博客阅读助手，默认使用简体中文回答。涉及博客内容的问题必须调用检索工具，非博客问题调用联网搜索工具"
-            "两种类型的工具不能同时调用，只能选其一"
-            "不要用自身知识冒充博客证据。简单问候可以直接回答。"
-        ))
-        response = agent_model.invoke([instruction, *state["messages"]])
+        call = AIMessage(content="", tool_calls=[{
+            "name": retriever_tool.name, "args": {"query": state["question"]},
+            "id": str(uuid4()), "type": "tool_call",
+        }])
+        return {"messages": [call], "search_type": "blog", "search_query": state["question"]}
 
-        if response.tool_calls:
-            # 模型可能违反提示同时调用两类工具，只保留其中一类，避免单个 ToolNode 无法执行
-            tool_names = set(call["name"] for call in response.tool_calls)
-            # 如果调用了两个工具直接优先使用web
-            if len(list(tool_names)) > 1:
-                search_type = "web"
-                response = response.model_copy(
-                    update={"tool_calls": [call for call in response.tool_calls if call["name"] == "web_search"]})
-            else:
-                search_type = "blog" if list(tool_names)[0] == "retrieve_blog_posts" else "web"
-
-                response = response.model_copy(
-                    update={"tool_calls": [call for call in response.tool_calls if
-                                           call["name"] == list(tool_names)[0]]})
-            update = {
-                "messages": [response],
-                "search_type": search_type,
-                "search_query": "；".join(
-                    str(call["args"].get("query", "")) for call in response.tool_calls
-                ) or state["question"],
-            }
-        else:
-            update = {
-                "messages": [response],
-                "answer": parser.invoke(response).strip() or "模型未返回回答，请重新提问。",
-            }
-        return update
+    def prepare_web_search(state):
+        call = AIMessage(content="", tool_calls=[{
+            "name": next(iter(tool_search_node.tools_by_name)),
+            "args": {"query": state["question"]},
+            "id": str(uuid4()), "type": "tool_call",
+        }])
+        return {"messages": [call], "search_type": "web", "search_query": state["question"]}
 
     # search节点，用于联网搜索博客中不存在的答案
     def search(state, config: RunnableConfig):
@@ -336,14 +314,6 @@ def get_graph(retriever_tool, web_search_tool, chat_model, max_rewrites=MAX_REWR
             "documents": documents
         }
 
-    # 根据使用的工具返回路由节点
-    def route_after_web_search(state) -> Literal["web", "blog"]:
-        if state["search_type"] == "blog":
-            return "blog"
-        if state["search_type"] == "web":
-            return "web"
-        return "end"
-
     # 检索节点直接调用工具进行检索
     def retrieve(state, config: RunnableConfig):
         update = tool_node.invoke(state, config)
@@ -353,7 +323,7 @@ def get_graph(retriever_tool, web_search_tool, chat_model, max_rewrites=MAX_REWR
             if not isinstance(message, ToolMessage):
                 continue
             if message.status == "error":
-                raise ValueError("检索工具执行失败，请检查工具名称和输入参数。")
+                continue
             for doc in message.artifact or []:
                 identity = (doc.metadata.get("source"), doc.page_content)
                 if identity not in seen:
@@ -370,12 +340,12 @@ def get_graph(retriever_tool, web_search_tool, chat_model, max_rewrites=MAX_REWR
         })
         return {"relevance": score.binary_score, "reason": score.reason}
 
-    # 根据评分结果决定下一步是生成答案、改写问题还是 fallback
-    def route_after_grade(state) -> Literal["generate", "rewrite", "fallback"]:
+    # 资料不足时最多改写两次，然后使用网络搜索。
+    def route_after_grade(state) -> Literal["generate", "rewrite", "prepare_web_search"]:
         if state["relevance"] == "yes":
             return "generate"
         if state["rewrite_count"] >= max_rewrites:
-            return "fallback"
+            return "prepare_web_search"
         return "rewrite"
 
     # 改写节点，根据上次查询和评分结果生成新的查询问题
@@ -403,24 +373,18 @@ def get_graph(retriever_tool, web_search_tool, chat_model, max_rewrites=MAX_REWR
         sources = list(dict.fromkeys(doc.metadata.get("source", "未知来源") for doc in state["documents"]))
         return {"answer": answer, "sources": sources, "messages": [AIMessage(content=answer)]}
 
-    # fallback 节点，当所有其他方法都失败时返回
-    def fallback(state):
-        answer = "当前已导入的博客没有足够依据回答这个问题。请补充相关博客，或提供更具体的问题。"
-        return {"answer": answer, "sources": [], "messages": [AIMessage(content=answer)]}
-
     graph = StateGraph(AgentState)
     for name, node in (("agent", agent), ("retrieve", retrieve), ("search", search), ("grade", grade_documents),
-                       ("rewrite", rewrite), ("generate", generate), ("fallback", fallback)):
+                       ("rewrite", rewrite), ("prepare_web_search", prepare_web_search), ("generate", generate)):
         graph.add_node(name, node)
     graph.add_edge(START, "agent")
-    # graph.add_conditional_edges("agent", tools_condition, {"tools": "retrieve", END: END})
-    graph.add_conditional_edges("agent", route_after_web_search, {"blog": "retrieve", "web": "search", "end": END})
+    graph.add_edge("agent", "retrieve")
     graph.add_edge("retrieve", "grade")
     graph.add_conditional_edges("grade", route_after_grade)
     graph.add_edge("rewrite", "retrieve")
+    graph.add_edge("prepare_web_search", "search")
     graph.add_edge("search", "generate")
     graph.add_edge("generate", END)
-    graph.add_edge("fallback", END)
     return graph.compile()
 
 
