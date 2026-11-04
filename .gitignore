@@ -4,3 +4,7 @@ __pycache__/
 .pytest_cache/
 frontend/node_modules/
 frontend/dist/
+.idea/
+*.iml
+/tests/test_api.py
+/tests/test_graph.py

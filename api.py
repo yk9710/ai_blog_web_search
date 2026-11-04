@@ -15,7 +15,13 @@ from langchain_core.messages import HumanMessage, AIMessageChunk
 from pydantic import BaseModel, field_validator
 from starlette.responses import StreamingResponse
 
-from blog_rag import AppConfig, add_documents_to_qdrant, ask_question, initialize_components
+from blog_rag import (
+    AppConfig,
+    add_documents_to_qdrant,
+    ask_question,
+    build_references,
+    initialize_components,
+)
 
 BASE_DIR = Path(__file__).resolve().parent
 load_dotenv(BASE_DIR / '.env')
@@ -60,7 +66,7 @@ class ImportRequest(BaseModel):
     @classmethod
     def nonempty(cls, value):
         if not value.strip():
-            raise ValueError('请输入博客文章链接 。')
+            raise ValueError('请输入博客文章链接。')
         return value.strip()
 
 
@@ -85,8 +91,8 @@ def import_blog(data: ImportRequest, request: Request):
                 status_code=400, detail=safe_error(error, request.app.state.config)
             ) from error
 
-async def event_generator(question:str,request):
-    async for chunk in request.app.state.resources.graph.astream({
+async def event_generator(question: str, request):
+    state = {
         "messages": [HumanMessage(content=question)],
         "question": question,
         "search_query": question,
@@ -97,19 +103,29 @@ async def event_generator(question:str,request):
         "rewrite_count": 0,
         "answer": "",
         "sources": [],
-    },stream_mode="messages",version="v2"):
-        if chunk["type"]=="messages":
-            token,metadata=chunk["data"]
-            if metadata.get("langgraph_node") != "generate" or not isinstance(token.content, str):
+    }
+
+    def sse(payload):
+        return f"data:{json.dumps(payload, ensure_ascii=False)}\n\n"
+
+    graph = request.app.state.resources.graph
+    async for chunk in graph.astream(state, stream_mode=["messages", "updates"], version="v2"):
+        if chunk["type"] == "messages":
+            token, metadata = chunk["data"]
+            if metadata.get("langgraph_node") != "generate":
                 continue
-            # messages 模式会重放节点返回的完整 AIMessage，只转发真正的 token 增量
-            if not isinstance(token, AIMessageChunk):
+            if not isinstance(token, AIMessageChunk) or not isinstance(token.content, str):
                 continue
             if token.content:
-                yield f"data:{json.dumps(
-                    {'content': token.content, 'role': 'assistant'}, ensure_ascii=False
-                )}\n\n"
+                yield sse({"type": "content", "content": token.content})
+        elif chunk["type"] == "updates":
+            result = chunk["data"].get("generate")
+            if result is None:
+                continue
+            references = build_references(result.get("documents", []))
+            yield sse({"type": "references", "documents": references})
     yield "data:[DONE]\n\n"
+
 
 @app.post('/api/ask')
 def ask(data: QuestionRequest, request: Request):

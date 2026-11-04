@@ -1,11 +1,10 @@
-import React, {memo, useEffect, useRef, useState} from 'react'
+import React, {useEffect, useRef, useState} from 'react'
 import {createRoot} from 'react-dom/client'
-import {Alert, Collapse, ConfigProvider, Spin} from 'antd'
-import {Bubble, Sender} from '@ant-design/x'
-import {XStream} from '@ant-design/x-sdk'
+import {ConfigProvider} from 'antd'
+import {Bubble, Sender, Sources} from '@ant-design/x'
+import {readAnswerStream} from './answerStream'
 import {XMarkdown} from '@ant-design/x-markdown'
 import {ArrowUpOutlined, BookOutlined, LinkOutlined, ThunderboltFilled} from '@ant-design/icons'
-import ReactMarkdown from 'react-markdown'
 import '@ant-design/x-markdown/themes/light.css'
 import '@ant-design/x-markdown/themes/dark.css'
 import 'antd/dist/reset.css'
@@ -34,27 +33,6 @@ function isArticleUrl(text) {
     }
 }
 
-const ChatMessage = memo(function ChatMessage({item}) {
-    return <div className={`message message-${item.role}`}>
-        <div className="message-label">{item.role === 'user' ? '你' : 'BLOGMIND'}</div>
-        {item.role === 'error' ? <Alert type="error" showIcon title={item.content}/> :
-            <Bubble placement={item.role === 'user' ? 'end' : 'start'}
-                    content={item.role === 'assistant' ?
-                        <div className="markdown"><ReactMarkdown>{item.content}</ReactMarkdown></div>
-                        : item.content}/>}
-        {item.role === 'assistant' && item.documents && (item.documents.length ?
-            <Collapse className="sources" ghost items={[{
-                key: 'sources', label: `查看检索资料（${item.documents.length}）`,
-                children: item.documents.map((doc, i) => <div className="source" key={i}>
-                    <strong>[{i + 1}] {doc.title || '检索资料'}</strong>
-                    <div>{/^https?:\/\//i.test(doc.source) ?
-                        <a href={doc.source} target="_blank" rel="noreferrer">{doc.source}</a>
-                        : doc.source}</div>
-                    <p>{doc.content}</p>
-                </div>),
-            }]}/> : <p className="no-source">此回答未附带博客证据。</p>)}
-    </div>
-})
 
 function Workspace() {
     const [busy, setBusy] = useState('')
@@ -66,49 +44,44 @@ function Workspace() {
         element?.scrollTo({top: element.scrollHeight, behavior: 'smooth'})
     }, [messages, busy])
 
-    async function readStream(text) {
-
-        const id = `answer-${Date.now()}`
-
-        setMessages((previous) => [
-            ...previous, {id, role: 'assistant', content: '', status: 'loading'},
-        ])
-
-        const response = await fetch('/api/ask', {
-            method: 'POST',
-            headers: {'Content-Type': 'application/json'},
-            body: JSON.stringify({question: text}),
-        })
-        if (!response.ok) {
-            throw new Error('当前环境不支持流式响应。')
-        }
-
+    async function readStream(text, id) {
 
         try {
-            for await (const chunk of XStream({
-                readableStream: response.body,
-
-            })) {
-
-                const payload = JSON.parse(chunk.data)
-
-                setMessages((previous) => previous.map((item) => item.id === id ? {
-                    ...item,
-                    ...(payload.content ? {
-                        content: item.content + payload.content,
-                        status: 'updating',
-                    } : {}),
-                } : item))
+            const response = await fetch('/api/ask', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({question: text}),
+            })
+            if (!response.ok || !response.body) {
+                throw new Error('无法获取流式响应，请稍后重试。')
             }
 
-        } catch (e) {
+            await readAnswerStream(response.body, (payload) => {
+                setMessages((previous) => previous.map((item) => {
+                    if (item.id !== id) return item
+                    if (payload.type === 'content') {
+                        return {
+                            ...item,
+                            content: item.content + payload.content,
+                            status: 'updating',
+                        }
+                    }
+                    if (payload.type === 'references') {
+                        return {...item, documents: payload.documents}
+                    }
+                    return item
+                }))
+            })
             setMessages((previous) => previous.map(
                 (item) => item.id === id ? {...item, status: 'success'} : item,
             ))
-
+        } catch (error) {
+            setMessages((previous) => previous.map(
+                (item) => item.id === id ? {...item, status: 'error'} : item,
+            ))
+            throw error
         }
     }
-
 
     async function submit(value) {
         const text = value.trim()
@@ -120,29 +93,38 @@ function Workspace() {
         ])
         setBusy(isUrl ? 'import' : 'ask')
         try {
-            if (isUrl) {
-                const data = await request('/import', {method: 'POST', body: {url: text}})
-                setMessages((previous) => [...previous, {
-                    role: 'assistant',
-                    status: 'success',
-                    content: `文章已导入，共 ${data.count} 个片段。现在可以向我提问了。`
-                }])
-            } else {
+            const id = `answer-${Date.now()}`
 
-                await readStream(text)
+            setMessages((previous) => [
+                ...previous, {id, role: 'assistant', content: '', documents: [], status: 'loading'},
+            ])
+
+            if (isUrl) {
+                try {
+                    const data = await request('/import', {method: 'POST', body: {url: text}})
+                    setMessages((previous) => [...previous, {
+                        role: 'assistant',
+                        status: 'success',
+                        content: `文章已导入，共 ${data.count} 个片段。现在可以向我提问了。`
+                    }])
+                } catch (error) {
+                    setMessages((previous) => previous.map(
+                        (item) => item.id === id ? {
+                            ...item,
+                            status: 'error',
+                            content: `${isUrl ? '文章导入' : '回答生成'}失败：${error.message}`
+                        } : item,
+                    ))
+                }
+
+            } else {
+                await readStream(text, id)
             }
-        } catch (error) {
-            setMessages((previous) => [...previous, {
-                role: 'assistant',
-                status: 'error',
-                content: `${isUrl ? '文章导入' : '回答生成'}失败：${error.message}`
-            }])
         } finally {
             setBusy('')
         }
     }
 
-    console.log(messages)
     return <div className="app-shell">
         <header className="topbar">
             <div className="brand">
@@ -182,9 +164,16 @@ function Workspace() {
                                         placement: 'start',
                                         header: (_, info) => <div className="message-label">BLOGMIND</div>,
                                         contentRender: (content, {status}) => {
-                                            const newContent = content.replace(/\n\n/g, '<br/><br/>')
+                                            console.log(content)
                                             return (
-                                                <XMarkdown className="x-markdown-light" content={newContent}/>
+                                                <XMarkdown
+                                                    className="x-markdown-light"
+                                                    content={content}
+                                                    streaming={{
+                                                        hasNextChunk: status === "updating",
+                                                        enableAnimation: true,
+                                                    }}
+                                                />
                                             )
                                         },
                                     },
@@ -198,12 +187,18 @@ function Workspace() {
                                 items={messages.map(item => ({
                                     ...item,
                                     loading: item.status === 'loading',
-                                    typing: {
-                                        effect: 'typing',
-                                        step: 5,
-                                        interval: 50,
-                                    },
                                     key: item.id,
+                                    footer: item.role === 'assistant' && item.documents?.length ? (
+                                        <Sources
+                                            defaultExpanded={false}
+                                            title={`参考资料（${item.documents.length}）`}
+                                            items={item.documents.map((doc) => ({
+                                                key: doc.index,
+                                                title: `[${doc.index}] ${doc.title || doc.source || '参考资料'}`,
+                                                url: /^https?:\/\//i.test(doc.source) ? doc.source : undefined,
+                                            }))}
+                                        />
+                                    ) : null,
                                 }))}
                             />
                         </>
