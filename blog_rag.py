@@ -34,7 +34,7 @@ BASE_DIR = Path(__file__).resolve().parent
 load_dotenv(BASE_DIR / ".env")
 
 MAX_PAGE_BYTES = 5 * 1024 * 1024
-MAX_REWRITES = 2
+MAX_REWRITES = 1
 
 
 @dataclass(frozen=True)
@@ -122,7 +122,8 @@ def initialize_vector_store(config: AppConfig, embeddings, client):
             vectors_config=VectorParams(size=dimension, distance=Distance.COSINE),
         )
     vectors = client.get_collection(collection_name).config.params.vectors
-    if not isinstance(vectors, VectorParams) or vectors.size != dimension or vectors.distance != Distance.COSINE:
+    if (not isinstance(vectors, VectorParams) or vectors.size != dimension
+            or vectors.distance != Distance.COSINE):
         raise ValueError("当前集合的向量配置不兼容，请使用匹配的模型和索引。")
     # 上面已按实际返回维度完成检查，避免封装重复调用付费嵌入接口进行验证。
     db = QdrantVectorStore(
@@ -147,7 +148,8 @@ def load_blog(url: str) -> list[Document]:
             response.raise_for_status()
             content_type = response.headers.get("content-type", "").lower()
             if content_type and not any(
-                    t in content_type for t in ("text/html", "application/xhtml+xml", "text/plain")):
+                t in content_type for t in ("text/html", "application/xhtml+xml", "text/plain")
+            ):
                 raise ValueError("该链接不是 HTML 或纯文本页面，请提供博客文章链接。")
             chunks = []
             size = 0
@@ -301,14 +303,19 @@ def get_graph(retriever_tool, web_search_tool, chat_model, max_rewrites=MAX_REWR
             if message.status == "error":
                 raise ValueError("联网搜索工具执行失败，请检查工具名称和输入参数。")
             try:
-                results = json.loads(message.content) if isinstance(message.content, str) else message.content
+                results = (
+                    json.loads(message.content)
+                    if isinstance(message.content, str) else message.content
+                )
             except json.JSONDecodeError:
                 continue
             for item in results:
                 source = item.get("url", "")
                 title = item.get("title", "")
                 content = item.get("content", "")
-                documents.append(Document(page_content=content, metadata={"source": source, "title": title}))
+                documents.append(Document(
+                    page_content=content, metadata={"source": source, "title": title}
+                ))
         return {
             "messages": update["messages"],
             "documents": documents
@@ -361,7 +368,11 @@ def get_graph(retriever_tool, web_search_tool, chat_model, max_rewrites=MAX_REWR
             "name": retriever_tool.name, "args": {"query": query},
             "id": str(uuid4()), "type": "tool_call",
         }])
-        return {"search_query": query, "rewrite_count": state["rewrite_count"] + 1, "messages": [call]}
+        return {
+            "search_query": query,
+            "rewrite_count": state["rewrite_count"] + 1,
+            "messages": [call],
+        }
 
     # 生成节点，根据检索结果生成答案
     def generate(state):
@@ -370,12 +381,17 @@ def get_graph(retriever_tool, web_search_tool, chat_model, max_rewrites=MAX_REWR
         }).strip()
         if not answer:
             raise ValueError("模型没有生成有效答案，请重试。")
-        sources = list(dict.fromkeys(doc.metadata.get("source", "未知来源") for doc in state["documents"]))
+        sources = list(dict.fromkeys(
+            doc.metadata.get("source", "未知来源") for doc in state["documents"]
+        ))
         return {"answer": answer, "sources": sources, "messages": [AIMessage(content=answer)]}
 
     graph = StateGraph(AgentState)
-    for name, node in (("agent", agent), ("retrieve", retrieve), ("search", search), ("grade", grade_documents),
-                       ("rewrite", rewrite), ("prepare_web_search", prepare_web_search), ("generate", generate)):
+    for name, node in (
+        ("agent", agent), ("retrieve", retrieve), ("search", search),
+        ("grade", grade_documents), ("rewrite", rewrite),
+        ("prepare_web_search", prepare_web_search), ("generate", generate),
+    ):
         graph.add_node(name, node)
     graph.add_edge(START, "agent")
     graph.add_edge("agent", "retrieve")
