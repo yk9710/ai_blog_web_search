@@ -1,0 +1,533 @@
+:root {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+    color: #20263b;
+    background: #f7f8fc;
+    font-synthesis: none
+}
+
+* {
+    box-sizing: border-box
+}
+
+body {
+    margin: 0
+}
+
+.app-shell {
+    min-height: 100vh
+}
+
+.topbar {
+    height: 76px;
+    background: #fff;
+    border-bottom: 1px solid #eaecf4;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0 max(32px, calc((100vw - 1060px) / 2))
+}
+
+.brand {
+    display: flex;
+    align-items: center;
+    gap: 11px
+}
+
+.brand-mark {
+    display: grid;
+    place-items: center;
+    width: 39px;
+    height: 39px;
+    border-radius: 12px;
+    background: #5365db;
+    color: white;
+    font-size: 20px
+}
+
+.brand strong, .brand span {
+    display: block
+}
+
+.brand strong {
+    font-size: 17px;
+    letter-spacing: -.4px
+}
+
+.brand span {
+    color: #99a2b4;
+    font-size: 11px;
+    margin-top: 3px
+}
+
+
+
+
+
+.workspace {
+    max-width: 960px;
+    margin: auto;
+    padding: 48px 32px 28px
+}
+
+.chat-heading {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0 8px 30px
+}
+
+.eyebrow {
+    color: #6978da;
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: .16em;
+    display: flex;
+    align-items: center;
+    gap: 9px
+}
+
+.eyebrow span {
+    display: inline-block;
+    width: 21px;
+    height: 2px;
+    background: #6978da
+}
+
+.chat-heading h1 {
+    font-size: 30px;
+    letter-spacing: -1px;
+    margin: 16px 0 9px
+}
+
+.chat-heading h1 span {
+    color: #6877da
+}
+
+.chat-heading p {
+    color: #929bac;
+    font-size: 13px;
+    line-height: 1.7;
+    margin: 0
+}
+
+.heading-icon {
+    width: 70px;
+    height: 70px;
+    background: #edefff;
+    color: #7885de;
+    border-radius: 23px;
+    display: grid;
+    place-items: center;
+    font-size: 28px;
+    transform: rotate(-8deg)
+}
+
+
+.chat-card {
+    background: #fff;
+    border: 1px solid #e9ecf4;
+    border-radius: 16px;
+    box-shadow: 0 8px 30px rgba(39, 51, 93, .04);
+    overflow: hidden
+}
+
+.card-header {
+    min-height: 70px;
+    padding: 16px 25px;
+    border-bottom: 1px solid #f0f1f6;
+    display: flex;
+    align-items: center;
+    justify-content: space-between
+}
+
+.card-header > div {
+    display: flex;
+    align-items: center;
+    gap: 11px
+}
+
+.card-header strong {
+    font-size: 14px
+}
+
+.card-icon {
+    height: 35px;
+    width: 35px;
+    display: grid;
+    place-items: center;
+    color: #7886dd;
+    background: #f0f2ff;
+    border-radius: 10px
+}
+
+.header-caption {
+    color: #a2aaba;
+    font-size: 12px
+}
+
+.header-tag {
+    font-size: 10px;
+    letter-spacing: .1em;
+    color: #a9b1c0
+}
+
+.chat-window {
+    min-height: 345px;
+    max-height: 58vh;
+    overflow-y: auto
+}
+
+.empty-chat {
+    text-align: center;
+    padding: 80px 20px
+}
+
+.empty-icon {
+    width: 54px;
+    height: 54px;
+    background: #f0f2ff;
+    color: #7281df;
+    border-radius: 18px;
+    display: grid;
+    place-items: center;
+    margin: auto;
+    font-size: 24px
+}
+
+.empty-chat h2 {
+    font-size: 17px;
+    margin: 18px 0 8px
+}
+
+.empty-chat p {
+    font-size: 13px;
+    color: #9aa3b2;
+    margin: 0
+}
+
+.suggestions {
+    display: flex;
+    justify-content: center;
+    gap: 9px;
+    margin-top: 22px;
+    flex-wrap: wrap
+}
+
+.suggestions button {
+    background: #fff;
+    border: 1px solid #e8ebf3;
+    color: #7e899d;
+    border-radius: 8px;
+    padding: 10px 12px;
+    font-size: 12px;
+    cursor: pointer
+}
+
+.suggestions button:disabled {
+    cursor: not-allowed;
+    opacity: .55
+}
+
+.suggestions button .anticon:first-child {
+    color: #8d9ae4;
+    margin-right: 5px
+}
+
+.suggestions button .anticon:last-child {
+    transform: rotate(45deg);
+    margin-left: 9px
+}
+
+.message-list {
+    display: flex;
+    flex-direction: column;
+    gap: 20px;
+    padding: 25px
+}
+
+.message-label {
+    font-size: 10px;
+    color: #9aa3b4;
+    font-weight: 700;
+    letter-spacing: .1em;
+    margin-bottom: 8px
+}
+
+.message-user .message-label {
+    text-align: right
+}
+
+.message .ant-bubble {
+    max-width: 100%
+}
+
+.message-user .ant-bubble-content {
+    background: #eef0ff
+}
+
+.message-assistant .ant-bubble-content {
+    background: #f7f8fc
+}
+
+.markdown {
+    line-height: 1.8;
+    overflow-wrap: anywhere
+}
+
+.markdown p:first-child {
+    margin-top: 0
+}
+
+.markdown p:last-child {
+    margin-bottom: 0
+}
+
+.markdown pre {
+    overflow: auto
+}
+
+.sources {
+    margin-top: 5px
+}
+
+.source {
+    font-size: 12px;
+    border-top: 1px solid #eef0f5;
+    padding: 12px 0;
+    overflow-wrap: anywhere
+}
+
+.source p {
+    white-space: pre-wrap;
+    line-height: 1.7;
+    color: #717b8c
+}
+
+.no-source {
+    font-size: 11px;
+    color: #9aa3b4
+}
+
+.thinking {
+    font-size: 12px;
+    color: #8993a4;
+    display: flex;
+    gap: 9px;
+    align-items: center
+}
+
+.sender-wrap {
+    border-top: 1px solid #f0f1f5;
+    padding: 18px 25px 20px
+}
+
+.sender-wrap label {
+    display: block;
+    font-size: 12px;
+    font-weight: 600;
+    color: #687286;
+    margin-bottom: 9px
+}
+
+.sender-hint {
+    display: flex;
+    justify-content: space-between;
+    gap: 10px;
+    color: #adb4c1;
+    font-size: 11px;
+    margin-top: 10px
+}
+
+footer {
+    font-size: 10px;
+    letter-spacing: .1em;
+    color: #b8bfcd;
+    text-align: center;
+    margin: 27px 0
+}
+
+footer span {
+    margin: 0 8px
+}
+
+@media (max-width: 600px) {
+    .topbar {
+        height: 68px;
+        padding: 0 20px
+    }
+
+    .workspace {
+        padding: 36px 16px
+    }
+
+    .chat-heading h1 {
+        font-size: 25px
+    }
+
+    .heading-icon {
+        width: 54px;
+        height: 54px;
+        font-size: 22px;
+        border-radius: 18px
+    }
+
+    .chat-heading {
+        padding-bottom: 24px
+    }
+
+    .header-caption, .header-tag {
+        display: none
+    }
+
+    .card-header {
+        padding: 14px 18px
+    }
+
+    .chat-window {
+        min-height: 330px
+    }
+
+    .empty-chat {
+        padding: 65px 14px
+    }
+
+    .message-list {
+        padding: 20px 16px
+    }
+
+    .sender-wrap {
+        padding: 16px
+    }
+
+    .sender-hint {
+        flex-direction: column;
+        gap: 5px
+    }
+}
+
+/* Keep the composer visible while the conversation scrolls independently. */
+html, body, #root {
+    height: 100%;
+}
+
+.app-shell {
+    height: 100vh;
+    height: 100dvh;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+}
+
+.topbar {
+    flex: none;
+}
+
+.workspace {
+    width: 100%;
+    flex: 1;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+    margin: 0 auto;
+    padding-top: 24px;
+    padding-bottom: max(14px, env(safe-area-inset-bottom));
+}
+
+.chat-heading {
+    flex: none;
+    padding-bottom: 18px;
+}
+
+.chat-heading h1 {
+    margin-top: 8px;
+    margin-bottom: 4px;
+}
+
+.heading-icon {
+    width: 58px;
+    height: 58px;
+    font-size: 24px;
+}
+
+.chat-card {
+    flex: 1;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+}
+
+.card-header, .sender-wrap {
+    flex: none;
+}
+
+.chat-window {
+    flex: 1;
+    min-height: 0;
+    max-height: none;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+}
+
+
+.empty-chat {
+    min-height: 100%;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    padding: 24px 20px;
+}
+
+footer {
+    flex: none;
+    margin: 10px 0 0;
+}
+
+@media (max-width: 600px) {
+    .workspace {
+        padding: 18px 12px max(10px, env(safe-area-inset-bottom));
+    }
+
+    .chat-heading {
+        padding-bottom: 14px;
+    }
+
+    .empty-chat {
+        padding: 20px 14px;
+    }
+}
+
+@media (max-height: 650px) {
+    .chat-heading, footer {
+        display: none;
+    }
+
+    .workspace {
+        padding-top: 12px;
+    }
+
+    .card-header {
+        min-height: 50px;
+        padding-top: 8px;
+        padding-bottom: 8px;
+    }
+
+    .sender-wrap {
+        padding-top: 10px;
+        padding-bottom: 10px;
+    }
+}
+
+@media (max-height: 430px) {
+    .topbar {
+        height: 48px;
+    }
+
+    .card-header, .sender-hint, .sender-wrap label {
+        display: none;
+    }
+}
+
+.empty-chat .empty-icon {
+    margin: 0 auto;
+}
