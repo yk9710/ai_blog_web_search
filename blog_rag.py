@@ -4,7 +4,7 @@ from dataclasses import dataclass, field
 from hashlib import sha256
 import json
 from pathlib import Path
-from typing import Annotated, Literal
+from typing import Annotated, Literal, Any
 from urllib.parse import urlparse
 from uuid import uuid4
 
@@ -18,6 +18,7 @@ from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.runnables import RunnableConfig
 from langchain_core.tools.retriever import create_retriever_tool
 from langchain_openai import ChatOpenAI, OpenAIEmbeddings
+from langchain_deepseek import ChatDeepSeek
 from langchain_qdrant import QdrantVectorStore
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langgraph.graph import END, START, StateGraph
@@ -85,8 +86,17 @@ def create_chat_model(config: AppConfig):
         max_retries=2,
         # DeepSeek V4 默认处于思考模式，会拒绝带强制 tool_choice 的请求（HTTP 400）；
         # 评分节点依赖 with_structured_output 的强制函数调用，这里统一关闭 thinking。
-        extra_body={"thinking": {"type": "disabled"}},
+        extra_body= {"thinking": {"type": "disabled"}},
     )
+def create_answer_model(config: AppConfig):
+   return ChatDeepSeek(
+    model=config.deepseek_model,
+    api_key=config.deepseek_api_key,
+    base_url=config.deepseek_base_url,
+    timeout=60,
+    max_retries=2,
+    extra_body={"thinking": {"type": "enabled"}},
+)
 
 
 def create_embeddings(config: AppConfig):
@@ -254,12 +264,12 @@ class AgentState(TypedDict):
     messages: Annotated[list[AnyMessage], add_messages]
     question: str
     search_query: str
-    search_type: Literal["unknown", "web", "blog"]
     documents: list[Document]
     relevance: Literal["unknown", "yes", "no"]
     reason: str
     rewrite_count: int
     answer: str
+    reasoning:str
     sources: list[str]
     intent: Literal["direct", "retrieve"]
 
@@ -273,7 +283,7 @@ class RelevanceGrade(BaseModel):
     reason: str = Field(description="简短说明依据是否充分，缺少什么信息")
 
 
-def get_graph(retriever_tool, web_search_tool, chat_model, max_rewrites=MAX_REWRITES):
+def get_graph(retriever_tool, web_search_tool, chat_model,answer_model, max_rewrites=MAX_REWRITES):
     """显式编排工具选择、检索、评分、改写和回答，所有完成分支均返回 answer。"""
     if max_rewrites < 0:
         raise ValueError("改写次数不能为负数。")
@@ -322,7 +332,7 @@ def get_graph(retriever_tool, web_search_tool, chat_model, max_rewrites=MAX_REWR
             "name": retriever_tool.name, "args": {"query": state["question"]},
             "id": str(uuid4()), "type": "tool_call",
         }])
-        return {"messages": [call], "search_type": "blog", "search_query": state["question"]}
+        return {"messages": [call],  "search_query": state["question"]}
 
     def prepare_web_search(state):
         call = AIMessage(content="", tool_calls=[{
@@ -330,7 +340,7 @@ def get_graph(retriever_tool, web_search_tool, chat_model, max_rewrites=MAX_REWR
             "args": {"query": state["question"]},
             "id": str(uuid4()), "type": "tool_call",
         }])
-        return {"messages": [call], "search_type": "web", "search_query": state["question"]}
+        return {"messages": [call], "search_query": state["question"]}
 
     # search节点，用于联网搜索博客中不存在的答案
     def search(state, config: RunnableConfig):
@@ -425,7 +435,9 @@ def get_graph(retriever_tool, web_search_tool, chat_model, max_rewrites=MAX_REWR
             inputs = {
                 "question": state["question"], "context": format_context(state["documents"]),
             }
-        answer = (prompt | chat_model | parser).invoke(inputs).strip()
+        msg = (prompt | answer_model).invoke(inputs)
+        answer = msg.content.strip()
+        reasoning = msg.additional_kwargs.get("reasoning_content") or ""
         if not answer:
             raise ValueError("模型没有生成有效答案，请重试。")
         sources = list(dict.fromkeys(
@@ -433,6 +445,7 @@ def get_graph(retriever_tool, web_search_tool, chat_model, max_rewrites=MAX_REWR
         ))
         return {
             "answer": answer,
+            "reasoning": reasoning,
             "sources": sources,
             "documents": state["documents"],
             "messages": [AIMessage(content=answer)],
@@ -461,24 +474,6 @@ def get_graph(retriever_tool, web_search_tool, chat_model, max_rewrites=MAX_REWR
     return graph.compile()
 
 
-def ask_question(graph, question):
-    question = question.strip()
-    if not question:
-        raise ValueError("请输入你想询问的问题。")
-    return graph.invoke({
-        "messages": [HumanMessage(content=question)],
-        "question": question,
-        "search_query": question,
-        "documents": [],
-        "relevance": "unknown",
-        "search_type": "unknown",
-        "reason": "",
-        "rewrite_count": 0,
-        "answer": "",
-        "sources": [],
-    }, config={"recursion_limit": 30})
-
-
 @dataclass
 class AppResources:
     client: QdrantClient
@@ -490,10 +485,11 @@ def initialize_components(config: AppConfig):
     config.validate()
     embeddings = create_embeddings(config)
     model = create_chat_model(config)
+    answer_model=create_answer_model(config)
     client = QdrantClient(url=config.qdrant_host, api_key=config.qdrant_api_key or None, timeout=20)
     try:
         db = initialize_vector_store(config, embeddings, client)
-        graph = get_graph(create_blog_tool(db), web_search, model)
+        graph = get_graph(create_blog_tool(db), web_search, model,answer_model)
         return AppResources(client=client, db=db, graph=graph)
     except Exception:
         client.close()

@@ -18,7 +18,6 @@ from starlette.responses import StreamingResponse
 from blog_rag import (
     AppConfig,
     add_documents_to_qdrant,
-    ask_question,
     build_references,
     initialize_components,
 )
@@ -96,13 +95,9 @@ async def event_generator(question: str, request):
         "messages": [HumanMessage(content=question)],
         "question": question,
         "search_query": question,
-        "search_type": "unknown",
         "documents": [],
         "relevance": "unknown",
-        "reason": "",
         "rewrite_count": 0,
-        "answer": "",
-        "sources": [],
     }
 
     def sse(payload):
@@ -116,6 +111,9 @@ async def event_generator(question: str, request):
                 continue
             if not isinstance(token, AIMessageChunk) or not isinstance(token.content, str):
                 continue
+            reasoning = token.additional_kwargs.get("reasoning_content") or ""
+            if reasoning:
+                yield sse({"type": "reasoning", "reasoning": reasoning})
             if token.content:
                 yield sse({"type": "content", "content": token.content})
         elif chunk["type"] == "updates":
