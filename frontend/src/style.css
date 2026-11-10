@@ -414,3 +414,9 @@ footer {
 .empty-chat .empty-icon {
     margin: 0 auto;
 }
+
+.answer-progress {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}

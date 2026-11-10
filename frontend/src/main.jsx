@@ -1,8 +1,9 @@
 import React, {useEffect, useRef, useState} from 'react'
 import {createRoot} from 'react-dom/client'
 import {ConfigProvider} from 'antd'
-import {Bubble, Sender, Sources, Think} from '@ant-design/x'
+import {Bubble, Sender, Sources, Think, ThoughtChain} from '@ant-design/x'
 import {readAnswerStream} from './answerStream'
+import {updateThoughtSteps} from './thoughtSteps'
 import {XMarkdown} from '@ant-design/x-markdown'
 import {ArrowUpOutlined, BookOutlined, LinkOutlined, ThunderboltFilled} from '@ant-design/icons'
 import '@ant-design/x-markdown/themes/light.css'
@@ -18,7 +19,9 @@ async function request(path, {body, method = 'GET'} = {}) {
     })
     const data = await response.json()
     if (!response.ok) {
-        const error = new Error(typeof data.detail === 'string' ? data.detail : '请求失败，请稍后重试。')
+        const error = new Error(
+            typeof data.detail === 'string' ? data.detail : '请求失败，请稍后重试。',
+        )
         throw error
     }
     return data
@@ -33,7 +36,6 @@ function isArticleUrl(text) {
     }
 }
 
-
 function Workspace() {
     const [busy, setBusy] = useState('')
     const [question, setQuestion] = useState('')
@@ -45,7 +47,6 @@ function Workspace() {
     }, [messages, busy])
 
     async function readStream(text, id) {
-
         try {
             const response = await fetch('/api/ask', {
                 method: 'POST',
@@ -57,35 +58,54 @@ function Workspace() {
             }
 
             await readAnswerStream(response.body, (payload) => {
-                setMessages((previous) => previous.map((item) => {
-                    if (item.id !== id) return item
-                    if (payload.type === 'content') {
-                        return {
-                            ...item,
-                            content: item.content + payload.content,
-                            status: 'updating',
+                setMessages((previous) =>
+                    previous.map((item) => {
+                        if (item.id !== id) return item
+                        if (payload.type === 'step') {
+                            return {
+                                ...item,
+                                steps: updateThoughtSteps(item.steps, payload),
+                                status: 'updating',
+                            }
                         }
-                    }
-                    if (payload.type === 'reasoning') {
-                        return {
-                            ...item,
-                            reasoning: item.reasoning + payload.reasoning,
-                            status: 'updating',
+                        if (payload.type === 'content') {
+                            return {
+                                ...item,
+                                content: item.content + payload.content,
+                                status: 'updating',
+                            }
                         }
-                    }
-                    if (payload.type === 'references') {
-                        return {...item, documents: payload.documents}
-                    }
-                    return item
-                }))
+                        if (payload.type === 'reasoning') {
+                            return {
+                                ...item,
+                                reasoning: item.reasoning + payload.reasoning,
+                                status: 'updating',
+                            }
+                        }
+                        if (payload.type === 'references') {
+                            return {...item, documents: payload.documents}
+                        }
+                        return item
+                    }),
+                )
             })
-            setMessages((previous) => previous.map(
-                (item) => item.id === id ? {...item, status: 'success'} : item,
-            ))
+            setMessages((previous) =>
+                previous.map((item) => (item.id === id ? {...item, status: 'success'} : item)),
+            )
         } catch (error) {
-            setMessages((previous) => previous.map(
-                (item) => item.id === id ? {...item, status: 'error'} : item,
-            ))
+            setMessages((previous) =>
+                previous.map((item) =>
+                    item.id === id
+                        ? {
+                            ...item,
+                            status: 'error',
+                            steps: item.steps.map((step) =>
+                                step.status === 'loading' ? {...step, status: 'error'} : step,
+                            ),
+                        }
+                        : item,
+                ),
+            )
             throw error
         }
     }
@@ -96,7 +116,8 @@ function Workspace() {
         const isUrl = isArticleUrl(text)
         setQuestion('')
         setMessages((previous) => [
-            ...previous, {role: 'user', status: 'success', content: text, id: Date.now()},
+            ...previous,
+            {role: 'user', status: 'success', content: text, id: Date.now()},
         ])
         setBusy(isUrl ? 'import' : 'ask')
         try {
@@ -109,6 +130,7 @@ function Workspace() {
                     role: 'assistant',
                     content: '',
                     reasoning: '',
+                    steps: [],
                     documents: [],
                     status: 'loading',
                 },
@@ -117,21 +139,27 @@ function Workspace() {
             if (isUrl) {
                 try {
                     const data = await request('/import', {method: 'POST', body: {url: text}})
-                    setMessages((previous) => [...previous, {
-                        role: 'assistant',
-                        status: 'success',
-                        content: `文章已导入，共 ${data.count} 个片段。现在可以向我提问了。`
-                    }])
+                    setMessages((previous) => [
+                        ...previous,
+                        {
+                            role: 'assistant',
+                            status: 'success',
+                            content: `文章已导入，共 ${data.count} 个片段。现在可以向我提问了。`,
+                        },
+                    ])
                 } catch (error) {
-                    setMessages((previous) => previous.map(
-                        (item) => item.id === id ? {
-                            ...item,
-                            status: 'error',
-                            content: `${isUrl ? '文章导入' : '回答生成'}失败：${error.message}`
-                        } : item,
-                    ))
+                    setMessages((previous) =>
+                        previous.map((item) =>
+                            item.id === id
+                                ? {
+                                    ...item,
+                                    status: 'error',
+                                    content: `${isUrl ? '文章导入' : '回答生成'}失败：${error.message}`,
+                                }
+                                : item,
+                        ),
+                    )
                 }
-
             } else {
                 await readStream(text, id)
             }
@@ -171,9 +199,9 @@ function Workspace() {
                 <section className="chat-card" aria-label="博客问答">
                     <div className="card-header">
                         <div>
-                <span className="card-icon">
-                  <ThunderboltFilled/>
-                </span>
+              <span className="card-icon">
+                <ThunderboltFilled/>
+              </span>
                             <strong>博客问答</strong>
                             <span className="header-caption">你的 AI 阅读伙伴</span>
                         </div>
@@ -205,16 +233,40 @@ function Workspace() {
                                             placement: 'start',
                                             header: (_, info) => {
                                                 return (
-                                                    info.extraInfo?.reasoning && (
-                                                        <Think
-                                                            title={'Complete thinking'}
-                                                            blink={info.status === 'updating'}
-                                                            defaultExpanded={false}
-                                                            loading={info.status === 'updating'}
-                                                        >
-                                                            {info.extraInfo?.reasoning}
-                                                        </Think>
-                                                    )
+                                                    <div className="answer-progress">
+                                                        {info.extraInfo?.steps?.length > 0 && (
+                                                            <ThoughtChain
+                                                                defaultExpandedKeys={['create_task']}
+                                                                items={[
+                                                                    {
+                                                                        key: 'create_task',
+                                                                        title: 'Create Task: Write New Component',
+                                                                        icon: false,
+                                                                        collapsible: true,
+                                                                        blink: info.status === 'updating',
+                                                                        content: (
+                                                                            <ThoughtChain
+                                                                                items={info.extraInfo.steps.map((step) => ({
+                                                                                    ...step,
+                                                                                    content:
+                                                                                        step.node === 'generate' && info.extraInfo.reasoning ? (
+                                                                                            <Think
+                                                                                                title={'Complete thinking'}
+                                                                                                blink={step.status === 'loading'}
+                                                                                                defaultExpanded={true}
+                                                                                                loading={step.status === 'loading'}
+                                                                                            >
+                                                                                                {info.extraInfo.reasoning}
+                                                                                            </Think>
+                                                                                        ) : undefined,
+                                                                                }))}
+                                                                            />
+                                                                        ),
+                                                                    },
+                                                                ]}
+                                                            />
+                                                        )}
+                                                    </div>
                                                 )
                                             },
                                             contentRender: (content, {status}) => {
@@ -235,15 +287,17 @@ function Workspace() {
                                         },
                                     }}
 
-                                    items={messages.map((item) => ({
+                                    items={messages.map(({steps, ...item}) => ({
                                         ...item,
                                         loading: item.status === 'loading',
                                         key: item.id,
                                         styles:
-                                            item.role === 'assistant' && item.reasoning && !item.content
+                                            item.role === 'assistant' &&
+                                            (item.reasoning || steps?.length) &&
+                                            !item.content
                                                 ? {content: {display: 'none'}}
                                                 : undefined,
-                                        extraInfo: {reasoning: item.reasoning},
+                                        extraInfo: {reasoning: item.reasoning, steps},
                                         footer:
                                             item.role === 'assistant' && item.documents?.length ? (
                                                 <Sources
@@ -273,9 +327,9 @@ function Workspace() {
                             placeholder="输入问题，或粘贴博客文章链接…"
                         />
                         <div className="sender-hint">
-                <span>
-                  <LinkOutlined/> 发送完整文章链接即可导入
-                </span>
+              <span>
+                <LinkOutlined/> 发送完整文章链接即可导入
+              </span>
                             <span>回答由 AI 生成，请核对重要信息</span>
                         </div>
                     </div>
@@ -288,10 +342,18 @@ function Workspace() {
     )
 }
 
-createRoot(document.getElementById('root')).render(<ConfigProvider theme={{
-    token: {
-        colorPrimary: '#5264dc', borderRadius: 10,
-        fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", '
-            + '"PingFang SC", "Microsoft YaHei", sans-serif',
-    }
-}}><Workspace/></ConfigProvider>)
+createRoot(document.getElementById('root')).render(
+    <ConfigProvider
+        theme={{
+            token: {
+                colorPrimary: '#5264dc',
+                borderRadius: 10,
+                fontFamily:
+                    '-apple-system, BlinkMacSystemFont, "Segoe UI", ' +
+                    '"PingFang SC", "Microsoft YaHei", sans-serif',
+            },
+        }}
+    >
+        <Workspace/>
+    </ConfigProvider>,
+)

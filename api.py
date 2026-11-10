@@ -57,6 +57,46 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title='AI 博客问答 API', lifespan=lifespan)
 
+STEP_TITLES = {
+    'classify_intent': '理解问题',
+    'retrieve': '检索博客',
+    'grade': '评估资料',
+    'rewrite': '优化检索问题',
+    'search': '联网搜索',
+    'generate': '生成回答',
+}
+
+
+def task_step(task):
+    node = task['name']
+    if node not in STEP_TITLES:
+        return None
+    step = {
+        'type': 'step',
+        'id': task['id'],
+        'node': node,
+        'title': STEP_TITLES[node],
+        'status': 'loading',
+    }
+    if 'error' not in task:
+        return step
+    if task['error'] is not None:
+        step['status'] = 'error'
+        return step
+    step['status'] = 'success'
+    result = task['result']
+    if node == 'classify_intent':
+        step['description'] = '直接回答' if result['intent'] == 'direct' else '需要检索资料'
+    elif node in ('retrieve', 'search'):
+        unit = '个片段' if node == 'retrieve' else '条结果'
+        step['description'] = f"找到 {len(result['documents'])} {unit}"
+    elif node == 'grade':
+        label = '资料充分' if result['relevance'] == 'yes' else '资料不足'
+        step['description'] = f"{label}：{result['reason']}"
+    elif node == 'rewrite':
+        step['description'] = result['search_query']
+    return step
+
 
 class ImportRequest(BaseModel):
     url: str
@@ -104,7 +144,9 @@ async def event_generator(question: str, request):
         return f"data:{json.dumps(payload, ensure_ascii=False)}\n\n"
 
     graph = request.app.state.resources.graph
-    async for chunk in graph.astream(state, stream_mode=["messages", "updates"], version="v2"):
+    async for chunk in graph.astream(
+        state, stream_mode=['messages', 'updates', 'tasks'], version='v2'
+    ):
         if chunk["type"] == "messages":
             token, metadata = chunk["data"]
             if metadata.get("langgraph_node") != "generate":
@@ -116,6 +158,10 @@ async def event_generator(question: str, request):
                 yield sse({"type": "reasoning", "reasoning": reasoning})
             if token.content:
                 yield sse({"type": "content", "content": token.content})
+        elif chunk['type'] == 'tasks':
+            step = task_step(chunk['data'])
+            if step:
+                yield sse(step)
         elif chunk["type"] == "updates":
             result = chunk["data"].get("generate")
             if result is None:

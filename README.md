@@ -8,6 +8,7 @@ X 展示对话，通过 FastAPI 和 LangGraph 编排千问嵌入、Qdrant 检索
 - 导入博客链接，提取网页正文并分片写入 Qdrant。
 - 对问候、助手身份和使用帮助直接回答；需要资料的问题优先检索已导入的博客。
 - 评估检索资料，资料不足时改写查询并重新检索，仍不足时转入联网搜索。
+- 使用 `ThoughtChain` 展示实际执行的节点、状态和结果摘要。
 - 使用 SSE 流式输出回答，由 `XMarkdown` 渲染正文、`Sources` 展示来源引用。
 - 按标题和来源 URL 联合去重，合并同一来源的片段，并统一上下文和引用列表的编号。
 
@@ -25,6 +26,7 @@ X 展示对话，通过 FastAPI 和 LangGraph 编排千问嵌入、Qdrant 检索
     ├── vite.config.js             # Vite 配置与 API 代理
     ├── src/main.jsx               # 对话界面、导入和问答交互
     ├── src/answerStream.js         # SSE 事件读取及结束标记检查
+    ├── src/thoughtSteps.js         # 思维链节点状态更新
     ├── src/style.css              # 页面样式
     └── tests/answerStream.test.js  # 流式事件解析测试
 ```
@@ -126,8 +128,8 @@ flowchart TD
 当前默认最多改写 1 次，由 `blog_rag.py` 中的 `MAX_REWRITES`
 控制。联网搜索使用原始问题，结果直接交给回答节点。意图分类失败时仍走检索路径。
 
-聊天节点通过 `ChatOpenAI`
-调用 DeepSeek，当前统一关闭思考模式。分类和资料评分使用结构化输出，回答节点根据资料生成简体中文答案及编号引用。
+分类和资料评分使用关闭思考模式的 `ChatOpenAI` 进行结构化输出；回答节点使用启用思考模式的
+`ChatDeepSeek`，根据资料生成简体中文答案及编号引用。
 
 ### 来源引用
 
@@ -144,17 +146,22 @@ flowchart TD
 | `POST /api/import` | `{"url":"https://example.com/article"}` | JSON，`count` 为片段数 |
 | `POST /api/ask`    | `{"question":"文章的核心观点是什么？"}` | `text/event-stream`    |
 
-`/api/ask` 通过 LangGraph 的 `messages` 和 `updates` 模式获取生成结果，仅转发 `generate`
-节点的正文增量。每个 SSE 事件由 `data:` 开头，以空行分隔：
+`/api/ask` 通过 LangGraph 的 `messages`、`updates` 和 `tasks` 模式获取生成结果和节点状态，转发
+`generate` 节点的思考与正文增量。每个 SSE 事件由 `data:` 开头，以空行分隔：
 
-| 事件         | 数据字段            | 前端处理                   |
-| ------------ | ------------------- | -------------------------- |
-| `content`    | `type`、`content`   | 将文本增量追加到回答正文   |
-| `references` | `type`、`documents` | 保存并展示来源列表         |
-| `[DONE]`     | 结束标记，不是 JSON | 结束读取，将消息标记为成功 |
+| 事件         | 数据字段                                            | 前端处理                   |
+| ------------ | --------------------------------------------------- | -------------------------- |
+| `step`       | `id`、`node`、`title`、`status`、可选 `description` | 更新思维链节点             |
+| `reasoning`  | `type`、`reasoning`                                 | 追加模型思考文本           |
+| `content`    | `type`、`content`                                   | 将文本增量追加到回答正文   |
+| `references` | `type`、`documents`                                 | 保存并展示来源列表         |
+| `[DONE]`     | 结束标记，不是 JSON                                 | 结束读取，将消息标记为成功 |
 
 每个 `documents` 条目包含 `index`、`source`、`title` 和
 `content`，分别表示引用编号、来源 URL、标题和合并后的正文片段。
+
+`step` 的 `id` 对应单次节点执行；重复检索会生成不同节点。`status` 为 `loading`、 `success` 或
+`error`，资料评估完成但资料不足仍属于 `success`。
 
 `readAnswerStream` 使用 `XStream` 解析 SSE，收到 `[DONE]`
 时正常返回。如果流关闭前没有收到该标记，会抛出“流未正常结束”；非法 JSON 也会抛错。前端捕获这些错误后，将对应消息标记为失败。
