@@ -1,11 +1,13 @@
 """FastAPI interface for the blog question-answering application."""
+import asyncio
 import json
 import os
 import threading
-import time
-from contextlib import asynccontextmanager
+from contextlib import aclosing, asynccontextmanager
 from pathlib import Path
+from weakref import WeakValueDictionary
 
+from anyio import CancelScope
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.concurrency import run_in_threadpool
@@ -47,7 +49,8 @@ async def lifespan(app: FastAPI):
         raise RuntimeError(f'服务初始化失败：{safe_error(error, config)}') from None
     app.state.config = config
     app.state.resources = resources
-    app.state.resource_lock = threading.RLock()
+    app.state.import_lock = threading.Lock()
+    app.state.thread_locks = WeakValueDictionary()
     try:
         yield
     finally:
@@ -123,7 +126,7 @@ class QuestionRequest(BaseModel):
 
 @app.post('/api/import')
 def import_blog(data: ImportRequest, request: Request):
-    with request.app.state.resource_lock:
+    with request.app.state.import_lock:
         try:
             return {'count': add_documents_to_qdrant(data.url, request.app.state.resources.db)}
         except Exception as error:
@@ -147,48 +150,63 @@ async def event_generator(question: str, request,thread_id:str):
         return f"data:{json.dumps(payload, ensure_ascii=False)}\n\n"
 
     graph = request.app.state.resources.graph
-    async for chunk in graph.astream(
+    chunks = graph.astream(
         state,
-            stream_mode=['messages', 'updates', 'tasks'],
-            version='v2',
-            config=config,
-    ):
-        if chunk["type"] == "messages":
-            token, metadata = chunk["data"]
-            if metadata.get("langgraph_node") != "generate":
-                continue
-            if not isinstance(token, AIMessageChunk) or not isinstance(token.content, str):
-                continue
-            reasoning = token.additional_kwargs.get("reasoning_content") or ""
-            if reasoning:
-                yield sse({"type": "reasoning", "reasoning": reasoning})
-            if token.content:
-                yield sse({"type": "content", "content": token.content})
-        elif chunk['type'] == 'tasks':
-            step = task_step(chunk['data'])
-            if step:
-                yield sse(step)
-        elif chunk["type"] == "updates":
-            result = chunk["data"].get("generate")
-            if result is None:
-                continue
-            yield sse({"type": "references", "documents": result["references"]})
+        stream_mode=['messages', 'updates', 'tasks'],
+        version='v2',
+        config=config,
+    )
+    async with aclosing(chunks):
+        async for chunk in chunks:
+            if chunk["type"] == "messages":
+                token, metadata = chunk["data"]
+                if metadata.get("langgraph_node") != "generate":
+                    continue
+                if not isinstance(token, AIMessageChunk) or not isinstance(token.content, str):
+                    continue
+                reasoning = token.additional_kwargs.get("reasoning_content") or ""
+                if reasoning:
+                    yield sse({"type": "reasoning", "reasoning": reasoning})
+                if token.content:
+                    yield sse({"type": "content", "content": token.content})
+            elif chunk['type'] == 'tasks':
+                step = task_step(chunk['data'])
+                if step:
+                    yield sse(step)
+            elif chunk["type"] == "updates":
+                result = chunk["data"].get("generate")
+                if result is None:
+                    continue
+                yield sse({"type": "references", "documents": result["references"]})
     yield "data:[DONE]\n\n"
+
+
+class ConversationStream(StreamingResponse):
+    def __init__(self, data: QuestionRequest, request: Request):
+        self.thread_id = data.thread_id
+        self.thread_locks = request.app.state.thread_locks
+        self.events = event_generator(data.question, request, data.thread_id)
+        super().__init__(
+            self.events,
+            media_type='text/event-stream',
+            headers={'X-Accel-Buffering': 'no'},
+        )
+
+    async def stream_response(self, send):
+        # 同一事件循环内取锁，仍有请求持有或等待时复用同一把锁。
+        lock = self.thread_locks.setdefault(self.thread_id, asyncio.Lock())
+        async with lock:
+            try:
+                await super().stream_response(send)
+            finally:
+                # 客户端断开后也要先关闭生成器，再让下一轮读取 checkpoint。
+                with CancelScope(shield=True):
+                    await self.events.aclose()
 
 
 @app.post('/api/ask')
 def ask(data: QuestionRequest, request: Request):
-    with request.app.state.resource_lock:
-        try:
-            return StreamingResponse(
-                event_generator(data.question, request,data.thread_id),
-                media_type='text/event-stream',
-                headers={"X-Accel-Buffering": "no"},
-            )
-        except Exception as error:
-            raise HTTPException(
-                status_code=400, detail=safe_error(error, request.app.state.config)
-            ) from error
+    return ConversationStream(data, request)
 
 
 frontend = BASE_DIR / 'frontend' / 'dist'
