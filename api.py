@@ -111,12 +111,14 @@ class ImportRequest(BaseModel):
 
 class QuestionRequest(BaseModel):
     question: str
+    thread_id:str
 
-    @field_validator('question')
+    @field_validator('question','thread_id')
     @classmethod
-    def nonempty(cls, value):
+    def nonempty(cls, value,info):
+        messages = {'question': '请输入你想询问的问题。', 'thread_id': '缺少会话标识。'}
         if not value.strip():
-            raise ValueError('请输入你想询问的问题。')
+            raise ValueError(messages[info.field_name])
         return value.strip()
 
 
@@ -130,7 +132,7 @@ def import_blog(data: ImportRequest, request: Request):
                 status_code=400, detail=safe_error(error, request.app.state.config)
             ) from error
 
-async def event_generator(question: str, request):
+async def event_generator(question: str, request,thread_id:str):
     state = {
         "messages": [HumanMessage(content=question)],
         "question": question,
@@ -140,12 +142,17 @@ async def event_generator(question: str, request):
         "rewrite_count": 0,
     }
 
+    config = {"configurable": {"thread_id": thread_id}}
+
     def sse(payload):
         return f"data:{json.dumps(payload, ensure_ascii=False)}\n\n"
 
     graph = request.app.state.resources.graph
     async for chunk in graph.astream(
-        state, stream_mode=['messages', 'updates', 'tasks'], version='v2'
+        state,
+            stream_mode=['messages', 'updates', 'tasks'],
+            version='v2',
+            config=config,
     ):
         if chunk["type"] == "messages":
             token, metadata = chunk["data"]
@@ -176,7 +183,7 @@ def ask(data: QuestionRequest, request: Request):
     with request.app.state.resource_lock:
         try:
             return StreamingResponse(
-                event_generator(data.question, request),
+                event_generator(data.question, request,data.thread_id),
                 media_type='text/event-stream',
                 headers={"X-Accel-Buffering": "no"},
             )

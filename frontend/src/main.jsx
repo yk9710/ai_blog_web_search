@@ -36,6 +36,8 @@ function isArticleUrl(text) {
     }
 }
 
+const thread_id = Date.now()
+
 function Workspace() {
     const [busy, setBusy] = useState('')
     const [question, setQuestion] = useState('')
@@ -46,12 +48,12 @@ function Workspace() {
         element?.scrollTo({top: element.scrollHeight, behavior: 'smooth'})
     }, [messages, busy])
 
-    async function readStream(text, id) {
+    async function readStream(text, id, thread_id) {
         try {
             const response = await fetch('/api/ask', {
                 method: 'POST',
                 headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({question: text}),
+                body: JSON.stringify({question: text, thread_id: String(thread_id)}),
             })
             if (!response.ok || !response.body) {
                 throw new Error('无法获取流式响应，请稍后重试。')
@@ -112,6 +114,7 @@ function Workspace() {
 
     async function submit(value) {
         const text = value.trim()
+
         if (!text || busy) return
         const isUrl = isArticleUrl(text)
         setQuestion('')
@@ -161,7 +164,7 @@ function Workspace() {
                     )
                 }
             } else {
-                await readStream(text, id)
+                await readStream(text, id, thread_id)
             }
         } finally {
             setBusy('')
