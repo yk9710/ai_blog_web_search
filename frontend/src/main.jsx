@@ -255,6 +255,9 @@ function Workspace() {
                                                                                         step.node === 'generate' && info.extraInfo.reasoning ? (
                                                                                             <Think
                                                                                                 title={'Complete thinking'}
+                                                                                                styles={{
+                                                                                                    status: {display: 'none'},
+                                                                                                }}
                                                                                                 blink={step.status === 'loading'}
                                                                                                 defaultExpanded={true}
                                                                                                 loading={step.status === 'loading'}

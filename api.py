@@ -18,7 +18,6 @@ from starlette.responses import StreamingResponse
 from blog_rag import (
     AppConfig,
     add_documents_to_qdrant,
-    build_references,
     initialize_components,
 )
 
@@ -173,8 +172,7 @@ async def event_generator(question: str, request,thread_id:str):
             result = chunk["data"].get("generate")
             if result is None:
                 continue
-            references = build_references(result.get("documents", []))
-            yield sse({"type": "references", "documents": references})
+            yield sse({"type": "references", "documents": result["references"]})
     yield "data:[DONE]\n\n"
 
 
